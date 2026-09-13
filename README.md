@@ -15,9 +15,9 @@
 推荐的使用顺序：
 
 ```
-设置信息 3260227024 yourpassword
+设置信息 accountid yourpassword
 导入个人课表
-设置开学 20260914
+设置开学 20260914<date>
 我的课表 7
 wakeup 15
 ```
@@ -74,7 +74,7 @@ AstrBot/data/plugin_data/astrbot_plugin_schedule/
 ```jsonc
 {
   "name": "审美与造型综合基础",
-  "teacher": "白晓霞",
+  "teacher": "白",
   "weekday": 1,
   "weekday_name": "星期一",
   "sections": "1-4",
@@ -141,7 +141,7 @@ WebVPN 门户            webvpn.nbt.edu.cn
 审美与造型综合基础
 08:00-11:25 · 第1-4节
 地点：SA202-1
-教师：白晓霞
+教师：白
 ```
 
 同一节课只会提醒一次（按 `日期|课程|节次|开始时刻` 幂等去重，跨天自动重置）。
