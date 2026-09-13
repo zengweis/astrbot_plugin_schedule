@@ -1,0 +1,7 @@
+name: astrbot_plugin_schedule
+display_name: 课表助手
+short_desc: 一键导入浙大宁波理工学院教务系统个人课表
+desc: 浙大宁波理工学院教务系统（WebVPN + 统一身份认证 + 正方 jwglxt）个人课表导入插件。发送「设置信息」保存账号密码，发送「导入个人课表」自动登录、抓取最新学期课表，做数据处理与格式化后保存到本地文件。
+version: v1.0.0
+author: JERRY WEI
+repo: https://github.com/zengweis/astrbot_plugin_schedule
