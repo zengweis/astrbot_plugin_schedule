@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -348,13 +349,17 @@ def save_agenda(
     *,
     keep: int = 20,
 ) -> Path:
-    """渲染并落盘，同时清理旧的渲染结果，避免目录无限膨胀。"""
+    """渲染并落盘，同时清理旧的渲染结果，避免目录无限膨胀。
+
+    文件名带微秒与随机后缀：只精确到秒的话，同一秒内两次渲染会互相覆盖，
+    并发请求时后一个用户会拿到前一个用户的图。
+    """
     image = render_agenda(plans, profile)
     render_dir = directory / "render"
     render_dir.mkdir(parents=True, exist_ok=True)
 
-    stamp = local_now().strftime("%Y%m%d_%H%M%S")
-    path = render_dir / f"agenda_{stamp}.png"
+    stamp = local_now().strftime("%Y%m%d_%H%M%S_%f")
+    path = render_dir / f"agenda_{stamp}_{secrets.token_hex(3)}.png"
     image.save(path, format="PNG", optimize=True)
 
     old = sorted(
