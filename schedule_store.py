@@ -13,20 +13,24 @@ from __future__ import annotations
 import json
 import os
 import stat
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
 try:
-    from .schedule_parser import Timetable, render_markdown
+    from .schedule_calendar import PeriodTime
+    from .schedule_parser import Timetable, render_markdown, timetable_from_dict
 except ImportError:  # 插件以平铺模块方式加载时
-    from schedule_parser import Timetable, render_markdown
+    from schedule_calendar import PeriodTime
+    from schedule_parser import Timetable, render_markdown, timetable_from_dict
 
 PLUGIN_NAME = "astrbot_plugin_schedule"
 CREDENTIAL_FILE = "credentials.json"
+SETTINGS_FILE = "settings.json"
 TIMETABLE_JSON = "timetable.json"
 TIMETABLE_MD = "timetable.md"
+PERIODS_JSON = "periods.json"
 
 _data_dir_cache: Path | None = None
 
@@ -124,6 +128,77 @@ class CredentialStore:
         return True
 
 
+@dataclass(slots=True)
+class Settings:
+    """插件运行参数。"""
+
+    wakeup_minutes: int = 0
+    semester_start: str = ""
+    notify_sessions: list[str] = field(default_factory=list)
+    updated_at: str = ""
+
+    @property
+    def wakeup_enabled(self) -> bool:
+        return self.wakeup_minutes > 0
+
+
+class SettingsStore:
+    """`wakeup` 提前量与开学日期等运行参数的读写。
+
+    `notify_sessions` 记录发起过 `wakeup` 的会话（unified_msg_origin），
+    提醒任务据此把消息推回原会话。
+    """
+
+    def __init__(self, directory: Path | None = None) -> None:
+        self._path = (directory or data_dir()) / SETTINGS_FILE
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def load(self) -> Settings:
+        if not self._path.exists():
+            return Settings()
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return Settings()
+        if not isinstance(raw, dict):
+            return Settings()
+        try:
+            minutes = int(raw.get("wakeup_minutes") or 0)
+        except (TypeError, ValueError):
+            minutes = 0
+        sessions = raw.get("notify_sessions") or []
+        return Settings(
+            wakeup_minutes=max(0, minutes),
+            semester_start=str(raw.get("semester_start") or ""),
+            notify_sessions=[str(s) for s in sessions if s],
+            updated_at=str(raw.get("updated_at") or ""),
+        )
+
+    def _write(self, settings: Settings) -> Settings:
+        settings.updated_at = (
+            datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        )
+        _atomic_write(
+            self._path, json.dumps(asdict(settings), ensure_ascii=False, indent=2)
+        )
+        return settings
+
+    def save_wakeup(self, minutes: int, session: str = "") -> Settings:
+        settings = self.load()
+        settings.wakeup_minutes = max(0, int(minutes))
+        if session and session not in settings.notify_sessions:
+            settings.notify_sessions.append(session)
+        return self._write(settings)
+
+    def save_semester_start(self, raw: str) -> Settings:
+        settings = self.load()
+        settings.semester_start = str(raw or "").strip()
+        return self._write(settings)
+
+
 class TimetableStore:
     """课表落盘：一份机器可读 JSON，一份人类可读 Markdown。"""
 
@@ -159,3 +234,59 @@ class TimetableStore:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+
+    def load_timetable(self) -> Timetable | None:
+        """读回结构化课表；没有导入过或文件损坏时返回 None。"""
+        data = self.load()
+        if not data:
+            return None
+        try:
+            timetable = timetable_from_dict(data)
+        except (TypeError, ValueError):
+            return None
+        return timetable if timetable.courses else None
+
+    def save_periods(self, periods: list[PeriodTime]) -> None:
+        """节次作息表独立落盘——它只随学期变化，不必每次导入都重新抓。
+
+        `time` 不能直接被 json 序列化，统一存成 ISO 字符串。
+        """
+        payload = [
+            {
+                "index": p.index,
+                "start": p.start.strftime("%H:%M"),
+                "end": p.end.strftime("%H:%M"),
+                "day_part": p.day_part,
+            }
+            for p in periods
+        ]
+        _atomic_write(
+            self._dir / PERIODS_JSON,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        )
+
+    def load_periods(self) -> list[PeriodTime]:
+        path = self._dir / PERIODS_JSON
+        if not path.exists():
+            return []
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        periods: list[PeriodTime] = []
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                periods.append(
+                    PeriodTime(
+                        index=int(item["index"]),
+                        start=time.fromisoformat(str(item["start"])),
+                        end=time.fromisoformat(str(item["end"])),
+                        day_part=str(item.get("day_part") or ""),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        periods.sort(key=lambda p: p.index)
+        return periods

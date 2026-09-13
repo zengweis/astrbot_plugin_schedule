@@ -172,6 +172,37 @@ def parse_timetable(payload: dict[str, Any]) -> Timetable:
     return timetable
 
 
+def timetable_from_dict(data: dict[str, Any]) -> Timetable:
+    """从 `Timetable.to_dict()` 的产物还原对象，供落盘后重新读取使用。
+
+    未知字段一律忽略——旧版本写下的文件不应让新版本读取失败。
+    """
+    allowed = {f for f in Course.__slots__}
+    courses: list[Course] = []
+    for raw in data.get("courses") or []:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            courses.append(Course(**{k: v for k, v in raw.items() if k in allowed}))
+        except TypeError:
+            continue
+
+    return Timetable(
+        student_name=str(data.get("student_name") or ""),
+        student_id=str(data.get("student_id") or ""),
+        class_name=str(data.get("class_name") or ""),
+        major=str(data.get("major") or ""),
+        college=str(data.get("college") or ""),
+        grade=str(data.get("grade") or ""),
+        year=str(data.get("year") or ""),
+        year_name=str(data.get("year_name") or ""),
+        term=str(data.get("term") or ""),
+        term_name=str(data.get("term_name") or ""),
+        fetched_at=str(data.get("fetched_at") or ""),
+        courses=courses,
+    )
+
+
 def _cell_safe(text: str) -> str:
     """转义会破坏 Markdown 表格的字符。"""
     return text.replace("|", "\\|").replace("\n", " ").strip()
