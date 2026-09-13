@@ -1,2 +1,3 @@
 httpx>=0.27
 pycryptodome>=3.20
+pillow>=10.0

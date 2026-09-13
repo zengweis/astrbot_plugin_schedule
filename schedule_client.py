@@ -20,9 +20,11 @@ from urllib.parse import quote
 import httpx
 
 try:
+    from .schedule_calendar import PeriodTime, parse_periods
     from .schedule_crypto import encrypt_password
     from .schedule_parser import Timetable, parse_timetable
 except ImportError:  # 插件以平铺模块方式加载时
+    from schedule_calendar import PeriodTime, parse_periods
     from schedule_crypto import encrypt_password
     from schedule_parser import Timetable, parse_timetable
 
@@ -134,6 +136,7 @@ class JwglxtClient:
     MENU_PATH = "/jwglxt/xtgl/index_initMenu.html"
     KB_PAGE_PATH = "/jwglxt/kbcx/xskbcx_cxXskbcxIndex.html?gnmkdm=N2151"
     KB_QUERY_PATH = "/jwglxt/kbcx/xskbcx_cxXsgrkb.html"
+    PERIODS_PATH = "/jwglxt/kbcx/xskbcx_cxRjc.html"
     # 课表页必须含学年下拉框，作为「页面是否真的加载成功」的判据
     KB_PAGE_MARKER = 'id="xnm"'
 
@@ -149,6 +152,10 @@ class JwglxtClient:
         self._client: httpx.AsyncClient | None = None
         self._kb_page_html = ""
         self._logged_in = False
+        # 最近一次查询的上下文，供节次作息表等附属接口复用
+        self.current_year = ""
+        self.current_term = ""
+        self.campus_id = ""
 
     # ---------------------------------------------------------------- 生命周期
 
@@ -396,11 +403,20 @@ class JwglxtClient:
             )
 
         try:
-            return response.json()
+            payload = response.json()
         except ValueError as exc:
             raise JwglxtError(
                 "课表接口返回的不是合法 JSON，可能被 WebVPN 拦截或页面改版。"
             ) from exc
+
+        # 记下本次上下文，供 fetch_periods 复用（节次作息表按校区区分）
+        self.current_year, self.current_term = year, term
+        for item in payload.get("kbList") or []:
+            campus = str(item.get("xqh_id") or "").strip()
+            if campus:
+                self.campus_id = campus
+                break
+        return payload
 
     async def import_timetable(self, year: str = "", term: str = "") -> Timetable:
         """抓取并解析课表；未指定学年学期时取页面默认值（最新）。"""
@@ -420,3 +436,29 @@ class JwglxtClient:
             if option["year"] == timetable.year and option["term"] == timetable.term:
                 timetable.term_name = timetable.term_name or option["term_name"]
         return timetable
+
+    async def fetch_periods(self, year: str = "", term: str = "") -> list[PeriodTime]:
+        """抓取节次作息表，用来把「第 3-4 节」换算成具体时刻。
+
+        参数缺失时沿用最近一次课表查询的学年/学期/校区。
+        """
+        if not self._logged_in:
+            await self.login()
+        response = await self._post(
+            self.JW_BASE + self.PERIODS_PATH,
+            data={
+                "xnm": year or self.current_year,
+                "xqm": term or self.current_term,
+                "xqh_id": self.campus_id,
+            },
+            headers={
+                "Referer": self.JW_BASE + self.KB_PAGE_PATH,
+                "Origin": self.JW_BASE,
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        )
+        try:
+            payload = response.json()
+        except ValueError:
+            return []
+        return parse_periods(payload)
