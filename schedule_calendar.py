@@ -28,6 +28,49 @@ KNOWN_SEMESTER_STARTS: dict[tuple[str, str], str] = {
 # 单次提醒最多提前多久，用于拦住明显不合理的输入
 MAX_LEAD_MINUTES = 24 * 60
 
+# 「我的课表」默认与最大天数（含今天）。超过上限直接拒绝，而不是静默截断——
+# 用户要 30 天却拿到 15 天，比明确被拒绝更容易误导。
+DEFAULT_AGENDA_DAYS = 7
+MAX_AGENDA_DAYS = 15
+
+
+class DayRangeError(ValueError):
+    """请求的课表天数不在允许范围内。"""
+
+
+def parse_day_count(raw: str, *, default: int = DEFAULT_AGENDA_DAYS) -> int:
+    """解析并校验「我的课表」的天数参数。
+
+    Args:
+        raw: 用户输入的参数字符串，空字符串表示使用默认值。
+        default: 未提供参数时采用的天数。
+
+    Returns:
+        通过校验的天数。
+
+    Raises:
+        DayRangeError: 非数字、小于 1、或大于 `MAX_AGENDA_DAYS`。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return default
+
+    token = text.split()[0]
+    # 只允许「纯数字」或「数字 + 天」。不能直接抽数字字符——那会把 "-3" 变成 3、"1.5" 变成 15。
+    cleaned = token.removesuffix("天")
+    if not cleaned.isdigit():
+        raise DayRangeError(f"天数需要是数字，收到的是「{token}」。")
+
+    days = int(cleaned)
+    if days < 1:
+        raise DayRangeError("天数至少为 1 天（含今天）。")
+    if days > MAX_AGENDA_DAYS:
+        raise DayRangeError(
+            f"一次最多只能生成 {MAX_AGENDA_DAYS} 天（含今天），"
+            f"你请求的是 {days} 天，已拒绝。"
+        )
+    return days
+
 
 def local_now() -> datetime:
     """本地当前时间。

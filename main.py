@@ -3,7 +3,7 @@
 指令：
     设置信息 <学号/账号> <密码>   保存教务系统登录凭据
     导入个人课表                  登录教务系统，抓取最新学期课表，格式化后落盘
-    我的课表 [天数]               渲染最近 N 天（含今天）的课程为图片，默认 7 天
+    我的课表 [天数]               渲染最近 N 天（含今天）的课程为图片，默认 7 天、上限 15 天
     设置开学 <YYYYMMDD>           指定本学期第一周周一的日期，用于按周次过滤
     wakeup <提前分钟>             设定每节课提前多少分钟提醒；0 表示关闭
 
@@ -23,12 +23,16 @@ from astrbot.api.star import Context, Star, register
 
 try:  # 插件被作为包加载（相对导入可用）
     from .schedule_calendar import (
+        DEFAULT_AGENDA_DAYS,
         KNOWN_SEMESTER_STARTS,
+        MAX_AGENDA_DAYS,
         MAX_LEAD_MINUTES,
+        DayRangeError,
         due_reminders,
         local_now,
         local_today,
         parse_date_input,
+        parse_day_count,
         plan_days,
         reminder_key,
         resolve_semester_start,
@@ -58,12 +62,16 @@ except ImportError:  # 插件被作为平铺模块加载
         _sys.path.insert(0, _plugin_dir)
 
     from schedule_calendar import (  # type: ignore[no-redef]
+        DEFAULT_AGENDA_DAYS,
         KNOWN_SEMESTER_STARTS,
+        MAX_AGENDA_DAYS,
         MAX_LEAD_MINUTES,
+        DayRangeError,
         due_reminders,
         local_now,
         local_today,
         parse_date_input,
+        parse_day_count,
         plan_days,
         reminder_key,
         resolve_semester_start,
@@ -97,14 +105,16 @@ CMD_MY_SCHEDULE = "我的课表"
 CMD_SET_TERM_START = "设置开学"
 CMD_WAKEUP = "wakeup"
 
-DEFAULT_DAYS = 7
-MAX_DAYS = 60
 REMINDER_TICK_SECONDS = 30
 
 USAGE_SET_PROFILE = (
     "用法：设置信息 <学号/账号> <密码>\n例如：设置信息 3260227024 yourpassword"
 )
-USAGE_MY_SCHEDULE = "用法：我的课表 [天数]\n例如：我的课表 7（查看最近 7 天，含今天）"
+USAGE_MY_SCHEDULE = (
+    f"用法：我的课表 [天数]\n"
+    f"例如：我的课表 7（查看最近 7 天，含今天）\n"
+    f"天数范围 1–{MAX_AGENDA_DAYS}，默认 {DEFAULT_AGENDA_DAYS}；超过 {MAX_AGENDA_DAYS} 天会被拒绝。"
+)
 USAGE_SET_TERM_START = (
     "用法：设置开学 <第一周周一的日期>\n"
     "例如：设置开学 20260914（2026 年 9 月 14 日）\n"
@@ -147,7 +157,7 @@ def _session_of(event: AstrMessageEvent) -> str:
     PLUGIN_NAME,
     "JERRY WEI",
     "浙大宁波理工学院教务系统个人课表：设置账号后导入课表、渲染课表图片、上课前提醒。",
-    "v0.2",
+    "v0.3",
 )
 class SchedulePlugin(Star):
     def __init__(self, context: Context):
@@ -413,15 +423,13 @@ class SchedulePlugin(Star):
 
     @filter.command(CMD_MY_SCHEDULE)
     async def cmd_my_schedule(self, event: AstrMessageEvent):
-        """渲染最近 N 天（含今天）的课程为图片，默认 7 天。"""
+        """渲染最近 N 天（含今天）的课程为图片，默认 7 天、上限 15 天。"""
         args = _args_after_command(event.message_str, CMD_MY_SCHEDULE)
-        days = DEFAULT_DAYS
-        if args:
-            raw = "".join(ch for ch in args.split()[0] if ch.isdigit())
-            if not raw:
-                yield event.plain_result(f"天数需要是数字。\n{USAGE_MY_SCHEDULE}")
-                return
-            days = max(1, min(MAX_DAYS, int(raw)))
+        try:
+            days = parse_day_count(args, default=DEFAULT_AGENDA_DAYS)
+        except DayRangeError as exc:
+            yield event.plain_result(f"{exc}\n\n{USAGE_MY_SCHEDULE}")
+            return
 
         timetable = self.timetables.load_timetable()
         if timetable is None:
